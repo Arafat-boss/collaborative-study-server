@@ -27,6 +27,7 @@ async function run() {
   try {
     const studySessionCollection = client.db("collaborative-study").collection('studySession')
     const userCollection = client.db("collaborative-study").collection('users')
+    const uploadMaterialsCollection = client.db("collaborative-study").collection('materials')
 
     //user related API's
     app.get('/users', async(req, res)=>{
@@ -57,6 +58,23 @@ async function run() {
         res.send(result)
     })
 
+    //upload materials
+    app.post('/materials', async(req, res)=>{
+      const material = req.body;
+      const result = await uploadMaterialsCollection.insertOne(material)
+      res.send(result)
+    })
+    //---
+    app.get('/materials/:email', async(req, res)=>{
+      const email = req.params.email;
+      const filter = { tutorEmail: email };
+      const result = await uploadMaterialsCollection.find(filter).toArray()
+      res.send(result)
+    })
+    app.get('/materials', async(req, res)=>{
+      const result = await uploadMaterialsCollection.find().toArray();
+      res.send(result)
+    })
 
 
 
