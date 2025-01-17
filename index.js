@@ -1,6 +1,7 @@
 const express = require("express");
 const app = express();
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const port = process.env.PORT || 9000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -29,11 +30,61 @@ async function run() {
       .db("collaborative-study")
       .collection("materials");
 
+    //jwt
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "7d",
+      });
+      res.send({ token });
+    });
+    //verifyToken
+    const verifyToken = (req, res, next) => {
+      console.log('VerifyToken teke',req.headers.authorization);
+      if(!req.headers.authorization){
+        return res.status(401).send({message: 'Unauthorized access'})
+      }
+      const token = req.headers.authorization.split(' ')[1];
+     jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (error, decoded)=>{
+      if(error){
+        return res.status(401).send({message: 'Unauthorized access'})
+      }
+      req.decoded = decoded;
+      next()
+     })
+    };
+
     //user related API's
-    app.get("/users", async (req, res) => {
+    app.get("/users",verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
+    //admin users API's
+    app.get('/user/admin/:email', async(req, res)=>{
+      const email = req.params.email;
+      console.log(email);
+      const query = {email: email}
+      const result = await userCollection.findOne(query)
+      console.log(result);
+      res.send(result.role)
+
+
+      // if(email !== req.decoded.email){
+      //   return res.status(403).send({message: 'Forbidan access'})
+      // }
+      // const query = {email: email}
+      // const user = await userCollection.findOne(query)
+      // let admin = false;
+      // let tutor = false;
+      // let student = false;
+      // if(user){
+      //   admin = user.role ==="admin";
+      //   tutor = user.role ==="tutor";
+      //   student = user.role ==="student";
+      // }
+      // res.send({admin, tutor, student})
+    })
+
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -48,12 +99,12 @@ async function run() {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set:{
-          role: 'admin'
-        }
-      }
-      const result  = await userCollection.updateOne(query, updateDoc);
-      res.send(result)
+        $set: {
+          role: "admin",
+        },
+      };
+      const result = await userCollection.updateOne(query, updateDoc);
+      res.send(result);
     });
 
     //tutor related API's
