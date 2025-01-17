@@ -1,19 +1,15 @@
 const express = require("express");
 const app = express();
-require('dotenv').config()
+require("dotenv").config();
 const cors = require("cors");
 const port = process.env.PORT || 9000;
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 //mid
 app.use(express.json());
 app.use(cors());
 
-
-
-
-const uri =
-  `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -25,64 +21,114 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    const studySessionCollection = client.db("collaborative-study").collection('studySession')
-    const userCollection = client.db("collaborative-study").collection('users')
-    const uploadMaterialsCollection = client.db("collaborative-study").collection('materials')
+    const studySessionCollection = client
+      .db("collaborative-study")
+      .collection("studySession");
+    const userCollection = client.db("collaborative-study").collection("users");
+    const uploadMaterialsCollection = client
+      .db("collaborative-study")
+      .collection("materials");
 
     //user related API's
-    app.get('/users', async(req, res)=>{
-        const result = await userCollection.find().toArray()
-        res.send(result)
-    })
-    app.post('/users', async(req, res)=>{
-        const user = req.body;
-        const result = await userCollection.insertOne(user)
-        res.send(result)
-    })
+    app.get("/users", async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const query = { email: user.email };
+      const existingUser = await userCollection.findOne(query);
+      if (existingUser) {
+        return res.send({ message: "User already exists" });
+      }
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+    app.patch("/users/admin/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set:{
+          role: 'admin'
+        }
+      }
+      const result  = await userCollection.updateOne(query, updateDoc);
+      res.send(result)
+    });
 
     //tutor related API's
-    app.get('/studySession', async(req, res)=>{
-        const result = await studySessionCollection.find().toArray()
-        res.send(result)
-    })
-    app.get('/studySession/:email', async(req, res)=>{
+    app.get("/studySession", async (req, res) => {
+      const result = await studySessionCollection.find().toArray();
+      res.send(result);
+    });
+    app.get("/studySession/:email", async (req, res) => {
       const email = req.params.email;
       const filter = { tutorEmail: email };
       const result = await studySessionCollection.find(filter).toArray();
-      res.send(result)
-    })
+      res.send(result);
+    });
     //create study session
-    app.post('/studySession', async(req,res)=>{
-        const session = req.body;
-        const result = await studySessionCollection.insertOne(session)
-        res.send(result)
-    })
+    app.post("/studySession", async (req, res) => {
+      const session = req.body;
+      const result = await studySessionCollection.insertOne(session);
+      res.send(result);
+    });
 
     //upload materials
-    app.post('/materials', async(req, res)=>{
+    app.post("/materials", async (req, res) => {
       const material = req.body;
-      const result = await uploadMaterialsCollection.insertOne(material)
-      res.send(result)
-    })
+      const result = await uploadMaterialsCollection.insertOne(material);
+      res.send(result);
+    });
     //---
-    app.get('/materials/:email', async(req, res)=>{
+    app.get("/materials/:email", async (req, res) => {
       const email = req.params.email;
       const filter = { tutorEmail: email };
-      const result = await uploadMaterialsCollection.find(filter).toArray()
-      res.send(result)
-    })
-    app.get('/materials', async(req, res)=>{
+      const result = await uploadMaterialsCollection.find(filter).toArray();
+      res.send(result);
+    });
+    //----
+    app.get("materials/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await uploadMaterialsCollection.findOne(query);
+      res.send(result);
+    });
+    //---
+
+    app.get("/materials", async (req, res) => {
       const result = await uploadMaterialsCollection.find().toArray();
-      res.send(result)
-    })
-
-
+      res.send(result);
+    });
+    //delete
+    app.delete("/materials/:id", async (req, res) => {
+      const id = req.params.id;
+      console.log(id);
+      const query = { _id: new ObjectId(id) };
+      const result = await uploadMaterialsCollection.deleteOne(query);
+      res.send(result);
+    });
+    //update
+    // app.put('/material/:id', async(req, res)=>{
+    //   const id = req.params.id;
+    //   const materials = req.body;
+    //   const filter = {_id: new ObjectId(id)}
+    //   const option = { upsert: true };
+    //   const update ={
+    //     $set: materials,
+    //   }
+    //   const result = await uploadMaterialsCollection.updateOne(
+    //     filter,
+    //     update,
+    //     option
+    //   );
+    //   res.send(result)
+    // })
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
   } finally {
-
   }
 }
 run().catch(console.dir);
