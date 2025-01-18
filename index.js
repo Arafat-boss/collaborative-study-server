@@ -40,7 +40,7 @@ async function run() {
     });
     //verifyToken
     const verifyToken = (req, res, next) => {
-      console.log('VerifyToken teke',req.headers.authorization);
+      // console.log('VerifyToken teke',req.headers.authorization);
       if(!req.headers.authorization){
         return res.status(401).send({message: 'Unauthorized access'})
       }
@@ -65,8 +65,8 @@ async function run() {
       console.log(email);
       const query = {email: email}
       const result = await userCollection.findOne(query)
-      console.log(result);
-      res.send(result.role)
+      console.log(result?.role);
+      res.send(result?.role)
 
 
       // if(email !== req.decoded.email){
@@ -95,17 +95,21 @@ async function run() {
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
-    app.patch("/users/admin/:id", async (req, res) => {
+    app.patch("/users/role/:id", async (req, res) => {
       const id = req.params.id;
+      const data = req.body;
+      console.log(data);
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
         $set: {
-          role: "admin",
+          role: data,
         },
       };
       const result = await userCollection.updateOne(query, updateDoc);
       res.send(result);
     });
+
+
 
     //tutor related API's
     app.get("/studySession", async (req, res) => {
@@ -118,6 +122,26 @@ async function run() {
       const result = await studySessionCollection.find(filter).toArray();
       res.send(result);
     });
+    //reject session patch---
+    app.patch('/sessions/reject/:id', async(req, res)=>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)}
+      const update ={
+            $set: {status: 'reject'},
+          } 
+      const result = await studySessionCollection.updateOne(query, update)
+      res.send(result)
+    })
+    //success session patch---
+    app.patch('/sessions/success/:id', async(req, res)=>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)}
+      const update ={
+            $set: {status: 'success'},
+          } 
+      const result = await studySessionCollection.updateOne(query, update)
+      res.send(result)
+    })
     //create study session
     app.post("/studySession", async (req, res) => {
       const session = req.body;
@@ -160,21 +184,21 @@ async function run() {
       res.send(result);
     });
     //update
-    // app.put('/material/:id', async(req, res)=>{
-    //   const id = req.params.id;
-    //   const materials = req.body;
-    //   const filter = {_id: new ObjectId(id)}
-    //   const option = { upsert: true };
-    //   const update ={
-    //     $set: materials,
-    //   }
-    //   const result = await uploadMaterialsCollection.updateOne(
-    //     filter,
-    //     update,
-    //     option
-    //   );
-    //   res.send(result)
-    // })
+    app.put('/material/:id', async(req, res)=>{
+      const id = req.params.id;
+      const materials = req.body;
+      const filter = {_id: new ObjectId(id)}
+      const option = { upsert: true };
+      const update ={
+        $set: materials,
+      }
+      const result = await uploadMaterialsCollection.updateOne(
+        filter,
+        update,
+        option
+      );
+      res.send(result)
+    })
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
