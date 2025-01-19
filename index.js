@@ -22,15 +22,12 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    const studySessionCollection = client
-      .db("collaborative-study")
-      .collection("studySession");
+    const studySessionCollection = client.db("collaborative-study").collection("studySession");
     const userCollection = client.db("collaborative-study").collection("users");
-    const uploadMaterialsCollection = client
-      .db("collaborative-study")
-      .collection("materials");
+    const uploadMaterialsCollection = client.db("collaborative-study").collection("materials");
+    const bookedSessionsCollection = client.db("collaborative-study").collection("booked-sessions");
 
-    //jwt
+    //jwt===================
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -38,7 +35,7 @@ async function run() {
       });
       res.send({ token });
     });
-    //verifyToken
+    //verifyToken===========
     const verifyToken = (req, res, next) => {
       // console.log('VerifyToken teke',req.headers.authorization);
       if(!req.headers.authorization){
@@ -54,12 +51,14 @@ async function run() {
      })
     };
 
-    //user related API's
+
+
+ //************user related API's Here***************
     app.get("/users",verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
-    //admin users API's
+    // users role API's
     app.get('/user/admin/:email', async(req, res)=>{
       const email = req.params.email;
       console.log(email);
@@ -67,24 +66,9 @@ async function run() {
       const result = await userCollection.findOne(query)
       console.log(result?.role);
       res.send(result?.role)
-
-
-      // if(email !== req.decoded.email){
-      //   return res.status(403).send({message: 'Forbidan access'})
-      // }
-      // const query = {email: email}
-      // const user = await userCollection.findOne(query)
-      // let admin = false;
-      // let tutor = false;
-      // let student = false;
-      // if(user){
-      //   admin = user.role ==="admin";
-      //   tutor = user.role ==="tutor";
-      //   student = user.role ==="student";
-      // }
-      // res.send({admin, tutor, student})
     })
 
+    //user information save just 1st time
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -95,14 +79,14 @@ async function run() {
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
+    //filter specific role (like- student, tutor, admin)
     app.patch("/users/role/:id", async (req, res) => {
       const id = req.params.id;
-      const data = req.body;
-      console.log(data);
+      const {role} = req.body;
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
         $set: {
-          role: data,
+          role
         },
       };
       const result = await userCollection.updateOne(query, updateDoc);
@@ -110,19 +94,27 @@ async function run() {
     });
 
 
-
-    //tutor related API's
+ //************tutor related API's Here***************
     app.get("/studySession", async (req, res) => {
       const result = await studySessionCollection.find().toArray();
       res.send(result);
     });
+    
+    //home page get specific data 
+    app.get('/study/:id', async(req, res)=>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)}
+      const result = await studySessionCollection.findOne(query)
+      res.send(result)
+    })
+    //specific tutor, specific data filter
     app.get("/studySession/:email", async (req, res) => {
       const email = req.params.email;
       const filter = { tutorEmail: email };
       const result = await studySessionCollection.find(filter).toArray();
       res.send(result);
     });
-    //reject session patch---
+    //reject session patch---by admin
     app.patch('/sessions/reject/:id', async(req, res)=>{
       const id = req.params.id;
       const query = {_id: new ObjectId(id)}
@@ -132,12 +124,24 @@ async function run() {
       const result = await studySessionCollection.updateOne(query, update)
       res.send(result)
     })
-    //success session patch---
+    //success session patch---by admin
     app.patch('/sessions/success/:id', async(req, res)=>{
       const id = req.params.id;
+      const {data} = req.body;
       const query = {_id: new ObjectId(id)}
       const update ={
-            $set: {status: 'success'},
+            $set: {status: 'success',  data},
+          } 
+      const result = await studySessionCollection.updateOne(query, update)
+      res.send(result)
+    })
+    //admin update tuition fee-------
+    app.patch('/sessions/fee/:id', async(req, res)=>{
+      const id = req.params.id;
+      const {data} = req.body;
+      const query = {_id: new ObjectId(id)}
+      const update ={
+            $set: {data},
           } 
       const result = await studySessionCollection.updateOne(query, update)
       res.send(result)
@@ -155,7 +159,7 @@ async function run() {
       const result = await uploadMaterialsCollection.insertOne(material);
       res.send(result);
     });
-    //---
+    //---specific tutor materials
     app.get("/materials/:email", async (req, res) => {
       const email = req.params.email;
       const filter = { tutorEmail: email };
@@ -175,7 +179,7 @@ async function run() {
       const result = await uploadMaterialsCollection.find().toArray();
       res.send(result);
     });
-    //delete
+    //materials delete
     app.delete("/materials/:id", async (req, res) => {
       const id = req.params.id;
       console.log(id);
@@ -183,7 +187,7 @@ async function run() {
       const result = await uploadMaterialsCollection.deleteOne(query);
       res.send(result);
     });
-    //update
+    //materials update
     app.put('/material/:id', async(req, res)=>{
       const id = req.params.id;
       const materials = req.body;
@@ -199,6 +203,43 @@ async function run() {
       );
       res.send(result)
     })
+
+    //************student related API's Here***************
+    app.post('/booked-sessions', async(req, res)=>{
+      const bookedSessions = req.body;
+      const result = await bookedSessionsCollection.insertOne(bookedSessions)
+      res.send(result);
+    })
+
+    app.get('/booked-sessions', async(req, res) =>{
+      const result = await bookedSessionsCollection.find().toArray()
+      res.send(result)
+    })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
