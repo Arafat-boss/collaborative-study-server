@@ -22,10 +22,16 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    const studySessionCollection = client.db("collaborative-study").collection("studySession");
+    const studySessionCollection = client
+      .db("collaborative-study")
+      .collection("studySession");
     const userCollection = client.db("collaborative-study").collection("users");
-    const uploadMaterialsCollection = client.db("collaborative-study").collection("materials");
-    const bookedSessionsCollection = client.db("collaborative-study").collection("booked-sessions");
+    const uploadMaterialsCollection = client
+      .db("collaborative-study")
+      .collection("materials");
+    const bookedSessionsCollection = client
+      .db("collaborative-study")
+      .collection("booked-sessions");
 
     //jwt===================
     app.post("/jwt", async (req, res) => {
@@ -38,35 +44,33 @@ async function run() {
     //verifyToken===========
     const verifyToken = (req, res, next) => {
       // console.log('VerifyToken teke',req.headers.authorization);
-      if(!req.headers.authorization){
-        return res.status(401).send({message: 'Unauthorized access'})
+      if (!req.headers.authorization) {
+        return res.status(401).send({ message: "Unauthorized access" });
       }
-      const token = req.headers.authorization.split(' ')[1];
-     jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (error, decoded)=>{
-      if(error){
-        return res.status(401).send({message: 'Unauthorized access'})
-      }
-      req.decoded = decoded;
-      next()
-     })
+      const token = req.headers.authorization.split(" ")[1];
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (error, decoded) => {
+        if (error) {
+          return res.status(401).send({ message: "Unauthorized access" });
+        }
+        req.decoded = decoded;
+        next();
+      });
     };
 
-
-
- //************user related API's Here***************
-    app.get("/users",verifyToken, async (req, res) => {
+    //************user related API's Here***************
+    app.get("/users", verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
     // users role API's
-    app.get('/user/admin/:email', async(req, res)=>{
+    app.get("/user/admin/:email", async (req, res) => {
       const email = req.params.email;
       console.log(email);
-      const query = {email: email}
-      const result = await userCollection.findOne(query)
+      const query = { email: email };
+      const result = await userCollection.findOne(query);
       console.log(result?.role);
-      res.send(result?.role)
-    })
+      res.send(result?.role);
+    });
 
     //user information save just 1st time
     app.post("/users", async (req, res) => {
@@ -82,31 +86,31 @@ async function run() {
     //filter specific role (like- student, tutor, admin)
     app.patch("/users/role/:id", async (req, res) => {
       const id = req.params.id;
-      const {role} = req.body;
+      const { role } = req.body;
       const query = { _id: new ObjectId(id) };
+      console.log(role);
       const updateDoc = {
         $set: {
-          role
+          role,
         },
       };
       const result = await userCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
-
- //************tutor related API's Here***************
+    //************tutor related API's Here***************
     app.get("/studySession", async (req, res) => {
       const result = await studySessionCollection.find().toArray();
       res.send(result);
     });
-    
-    //home page get specific data 
-    app.get('/study/:id', async(req, res)=>{
+
+    //home page get specific data
+    app.get("/study/:id", async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await studySessionCollection.findOne(query)
-      res.send(result)
-    })
+      const query = { _id: new ObjectId(id) };
+      const result = await studySessionCollection.findOne(query);
+      res.send(result);
+    });
     //specific tutor, specific data filter
     app.get("/studySession/:email", async (req, res) => {
       const email = req.params.email;
@@ -115,37 +119,38 @@ async function run() {
       res.send(result);
     });
     //reject session patch---by admin
-    app.patch('/sessions/reject/:id', async(req, res)=>{
+    app.patch("/sessions/reject/:id", async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const update ={
-            $set: {status: 'reject'},
-          } 
-      const result = await studySessionCollection.updateOne(query, update)
-      res.send(result)
-    })
+      const query = { _id: new ObjectId(id) };
+      const update = {
+        $set: { status: "reject" },
+      };
+      const result = await studySessionCollection.updateOne(query, update);
+      res.send(result);
+    });
+
+
     //success session patch---by admin
+    //fee update session patch---by admin
     app.patch('/sessions/success/:id', async(req, res)=>{
       const id = req.params.id;
-      const {data} = req.body;
+      const {registrationFee} = req.body;
       const query = {_id: new ObjectId(id)}
       const update ={
-            $set: {status: 'success',  data},
-          } 
+            $set: {status: 'success', registrationFee},
+          }
       const result = await studySessionCollection.updateOne(query, update)
       res.send(result)
     })
-    //admin update tuition fee-------
-    app.patch('/sessions/fee/:id', async(req, res)=>{
+
+    //delete success session
+    app.delete('/deleted/session/:id', async(req, res)=>{
       const id = req.params.id;
-      const {data} = req.body;
       const query = {_id: new ObjectId(id)}
-      const update ={
-            $set: {data},
-          } 
-      const result = await studySessionCollection.updateOne(query, update)
+      const result = await studySessionCollection.deleteOne(query)
       res.send(result)
     })
+
     //create study session
     app.post("/studySession", async (req, res) => {
       const session = req.body;
@@ -175,71 +180,67 @@ async function run() {
     });
     //---
 
-    app.get("/materials", async (req, res) => {
-      const result = await uploadMaterialsCollection.find().toArray();
-      res.send(result);
+    app.get("/allMaterials", async (req, res) => {
+      try {
+        const result = await uploadMaterialsCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching materials:", error);
+        res.status(500).send({ error: "Failed to fetch materials" });
+      }
     });
+
     //materials delete
     app.delete("/materials/:id", async (req, res) => {
       const id = req.params.id;
-      console.log(id);
       const query = { _id: new ObjectId(id) };
       const result = await uploadMaterialsCollection.deleteOne(query);
       res.send(result);
     });
     //materials update
-    app.put('/material/:id', async(req, res)=>{
+    app.put("/material/:id", async (req, res) => {
       const id = req.params.id;
       const materials = req.body;
-      const filter = {_id: new ObjectId(id)}
+      const filter = { _id: new ObjectId(id) };
       const option = { upsert: true };
-      const update ={
+      const update = {
         $set: materials,
-      }
+      };
       const result = await uploadMaterialsCollection.updateOne(
         filter,
         update,
         option
       );
-      res.send(result)
-    })
+      res.send(result);
+    });
+
+
 
     //************student related API's Here***************
-    app.post('/booked-sessions', async(req, res)=>{
+    app.post("/booked-sessions", async (req, res) => {
       const bookedSessions = req.body;
-      const result = await bookedSessionsCollection.insertOne(bookedSessions)
+      const result = await bookedSessionsCollection.insertOne(bookedSessions);
       res.send(result);
-    })
+    });
 
-    app.get('/booked-sessions', async(req, res) =>{
-      const result = await bookedSessionsCollection.find().toArray()
-      res.send(result)
-    })
+    app.get("/booked-sessions", async (req, res) => {
+      const result = await bookedSessionsCollection.find().toArray();
+      res.send(result);
+    });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    // specific student booked data
+    app.get("/bookedSessions/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { user: email };
+      const result = await bookedSessionsCollection.find(query).toArray();
+      res.send(result);
+    });
+    app.get("/bookedDetails/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await bookedSessionsCollection.find(query).toArray();
+      res.send(result);
+    });
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
