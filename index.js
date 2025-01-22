@@ -32,6 +32,12 @@ async function run() {
     const bookedSessionsCollection = client
       .db("collaborative-study")
       .collection("booked-sessions");
+    const studentReviewCollection = client
+      .db("collaborative-study")
+      .collection("student-review");
+    const studentNoteCollection = client
+      .db("collaborative-study")
+      .collection("student-notes");
 
     //jwt===================
     app.post("/jwt", async (req, res) => {
@@ -119,37 +125,71 @@ async function run() {
       res.send(result);
     });
     //reject session patch---by admin
+    // app.patch("/sessions/reject/:id", async (req, res) => {
+    //   const id = req.params.id;
+    //   const query = { _id: new ObjectId(id) };
+    //   const update = {
+    //     $set: { status: "reject" },
+    //   };
+    //   const result = await studySessionCollection.updateOne(query, update);
+    //   res.send(result);
+    // });
     app.patch("/sessions/reject/:id", async (req, res) => {
       const id = req.params.id;
+      const { rejectionReason } = req.body;
+
       const query = { _id: new ObjectId(id) };
       const update = {
-        $set: { status: "reject" },
+        $set: {
+          status: "reject",
+          rejectionReason: rejectionReason || "No reason provided",
+        },
+      };
+
+      const result = await studySessionCollection.updateOne(query, update);
+      res.send(result);
+    });
+
+    //================================
+    app.patch("/studySession/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+
+      if (status !== "pending") {
+        return res
+          .status(400)
+          .send({ message: "Invalid status. Only 'pending' is allowed." });
+      }
+
+      const query = { _id: new ObjectId(id) };
+      const update = {
+        $set: { status: "pending" },
+      };
+
+      const result = await studySessionCollection.updateOne(query, update);
+      res.send(result);
+    });
+
+    //success session patch---by admin
+    //fee update session patch---by admin
+    app.patch("/sessions/success/:id", async (req, res) => {
+      const id = req.params.id;
+      const { registrationFee } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const update = {
+        $set: { status: "success", registrationFee },
       };
       const result = await studySessionCollection.updateOne(query, update);
       res.send(result);
     });
 
-
-    //success session patch---by admin
-    //fee update session patch---by admin
-    app.patch('/sessions/success/:id', async(req, res)=>{
-      const id = req.params.id;
-      const {registrationFee} = req.body;
-      const query = {_id: new ObjectId(id)}
-      const update ={
-            $set: {status: 'success', registrationFee},
-          }
-      const result = await studySessionCollection.updateOne(query, update)
-      res.send(result)
-    })
-
     //delete success session
-    app.delete('/deleted/session/:id', async(req, res)=>{
+    app.delete("/deleted/session/:id", async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)}
-      const result = await studySessionCollection.deleteOne(query)
-      res.send(result)
-    })
+      const query = { _id: new ObjectId(id) };
+      const result = await studySessionCollection.deleteOne(query);
+      res.send(result);
+    });
 
     //create study session
     app.post("/studySession", async (req, res) => {
@@ -214,13 +254,30 @@ async function run() {
       res.send(result);
     });
 
-
-
     //************student related API's Here***************
     app.post("/booked-sessions", async (req, res) => {
-      const bookedSessions = req.body;
-      const result = await bookedSessionsCollection.insertOne(bookedSessions);
-      res.send(result);
+      const { sessionId, user, ...data } = req.body;
+      const query = { sessionId, user };
+
+      try {
+        // Check if the session already exists for this user
+        const existingSession = await bookedSessionsCollection.findOne(query);
+
+        if (existingSession) {
+          return res.send({ message: "Session already booked" });
+        }
+
+        // If not, insrt the session
+        const result = await bookedSessionsCollection.insertOne({
+          sessionId,
+          user,
+          ...data,
+        });
+        res.send(result);
+      } catch (error) {
+        console.error("Error booking session:", error);
+        res.status(500).send({ error: "Failed to book session" });
+      }
     });
 
     app.get("/booked-sessions", async (req, res) => {
@@ -235,10 +292,49 @@ async function run() {
       const result = await bookedSessionsCollection.find(query).toArray();
       res.send(result);
     });
+
     app.get("/bookedDetails/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
-      const result = await bookedSessionsCollection.find(query).toArray();
+      const result = await bookedSessionsCollection.findOne(query);
+      res.send(result);
+    });
+
+    //student review
+    app.post("/all-reviews", async (req, res) => {
+      const review = req.body;
+      const result = await studentReviewCollection.insertOne(review);
+      res.send(result);
+    });
+    //student all-note
+    app.post("/all-notes", async (req, res) => {
+      const note = req.body;
+      const result = await studentNoteCollection.insertOne(note);
+      res.send(result);
+    });
+    app.get("/all-notes/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { email: email };
+      const result = await studentNoteCollection.find(query).toArray();
+      res.send(result);
+    });
+    //delete
+    app.delete("/all-notes/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const result = await studentNoteCollection.deleteOne(query);
+      res.send(result);
+    });
+    //note update
+    app.put("/all-notes/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedNote = req.body;
+      const query = { _id: new ObjectId(id) };
+      const update = {
+        $set: updatedNote,
+      };
+      const result = await studentNoteCollection.updateOne(query, update);
       res.send(result);
     });
 
