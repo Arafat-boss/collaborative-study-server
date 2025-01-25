@@ -1,6 +1,7 @@
 const express = require("express");
 const app = express();
 require("dotenv").config();
+const stript = require("stripe")(process.env.STRIP_SECRET_KEY)
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const port = process.env.PORT || 9000;
@@ -74,7 +75,7 @@ async function run() {
       console.log(email);
       const query = { email: email };
       const result = await userCollection.findOne(query);
-      console.log(result?.role);
+      // console.log(result?.role);
       res.send(result?.role);
     });
 
@@ -124,16 +125,8 @@ async function run() {
       const result = await studySessionCollection.find(filter).toArray();
       res.send(result);
     });
-    //reject session patch---by admin
-    // app.patch("/sessions/reject/:id", async (req, res) => {
-    //   const id = req.params.id;
-    //   const query = { _id: new ObjectId(id) };
-    //   const update = {
-    //     $set: { status: "reject" },
-    //   };
-    //   const result = await studySessionCollection.updateOne(query, update);
-    //   res.send(result);
-    // });
+    
+    //reject session and feedback rejection Reason patch---by admin
     app.patch("/sessions/reject/:id", async (req, res) => {
       const id = req.params.id;
       const { rejectionReason } = req.body;
@@ -337,6 +330,23 @@ async function run() {
       const result = await studentNoteCollection.updateOne(query, update);
       res.send(result);
     });
+
+    //===============/create-payment-intent===================
+    app.post('/create-payment-intent', async(req, res)=>{
+      const {registrationFee} = req.body;
+      const amount = parseInt(registrationFee * 100);
+      console.log('inside tha amount', amount);
+
+      const paymentIntent =await stript.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
+      });
+      res.send({
+        clientSecret: paymentIntent.client_secret
+      })
+
+    })
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
