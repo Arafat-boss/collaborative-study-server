@@ -9,7 +9,13 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 //mid
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://collaborative-study-plat-312b7.web.app',
+    'http://localhost:5173'
+  ],
+  credentials: true
+}));
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
