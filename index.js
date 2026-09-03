@@ -18,7 +18,7 @@ app.use(
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps, curl, Postman)
       if (!origin) return callback(null, true);
-      
+
       const allowedOrigins = [
         "https://collaborative-study-plat-312b7.web.app",
         "https://collaborative-study-plat-312b7.firebaseapp.com",
@@ -26,7 +26,7 @@ app.use(
         "http://localhost:5174",
         "http://localhost:3000",
       ];
-      
+
       if (
         allowedOrigins.includes(origin) ||
         /^http:\/\/localhost:\d+$/.test(origin) ||
@@ -92,7 +92,7 @@ app.get("/", async (req, res) => {
   let dbStatus = "disconnected";
   let dbError = null;
   let userCount = 0;
-  
+
   try {
     const { client, db } = getDatabase();
     await client.db("admin").command({ ping: 1 });
