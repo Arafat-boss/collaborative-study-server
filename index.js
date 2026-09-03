@@ -89,29 +89,48 @@ async function run() {
       }
     });
 
-    // User role API
-    app.get("/user/admin/:email", async (req, res) => {
+    // User role API (supports multiple aliases and case-insensitive email search)
+    app.get(["/user/admin/:email", "/user/role/:email", "/users/role/:email"], async (req, res) => {
       try {
-        const email = req.params.email;
-        const query = { email: email };
+        const rawEmail = req.params.email?.trim();
+        if (!rawEmail) {
+          return res.send({ role: "student", admin: false });
+        }
+        const escapedEmail = rawEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const query = { email: { $regex: new RegExp(`^${escapedEmail}$`, "i") } };
         const result = await userCollection.findOne(query);
-        res.send(result?.role || "student");
+        const userRole = (result?.role || "student").toLowerCase().trim();
+        res.send({ role: userRole, admin: userRole === "admin" });
       } catch (error) {
         console.error("Error fetching user role:", error);
         res.status(500).send({ error: "Failed to fetch user role" });
       }
     });
 
-    // User information save (first time)
+    // User information save (first time or login sync)
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
-        const query = { email: user.email };
+        const rawEmail = user.email?.trim();
+        if (!rawEmail) {
+          return res.status(400).send({ error: "Email is required" });
+        }
+        const escapedEmail = rawEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const query = { email: { $regex: new RegExp(`^${escapedEmail}$`, "i") } };
         const existingUser = await userCollection.findOne(query);
         if (existingUser) {
-          return res.send({ message: "User already exists", insertedId: null });
+          return res.send({
+            message: "User already exists",
+            insertedId: null,
+            role: existingUser.role || "student",
+          });
         }
-        const result = await userCollection.insertOne(user);
+        const result = await userCollection.insertOne({
+          ...user,
+          email: rawEmail,
+          role: (user.role || "student").toLowerCase().trim(),
+          createdAt: new Date().toISOString(),
+        });
         res.send(result);
       } catch (error) {
         console.error("Error saving user:", error);
@@ -124,9 +143,10 @@ async function run() {
       try {
         const id = req.params.id;
         const { role } = req.body;
+        const sanitizedRole = (role || "student").toLowerCase().trim();
         const query = { _id: new ObjectId(id) };
         const updateDoc = {
-          $set: { role },
+          $set: { role: sanitizedRole },
         };
         const result = await userCollection.updateOne(query, updateDoc);
         res.send(result);
