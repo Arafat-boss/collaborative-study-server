@@ -2,7 +2,7 @@ const express = require("express");
 const app = express();
 require("dotenv").config();
 
-// Stripe Safe Initialization (Will not crash the server if env is missing)
+// Stripe Safe Initialization
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || process.env.STRIP_SECRET_KEY;
 const stripe = stripeSecretKey ? require("stripe")(stripeSecretKey) : null;
 
@@ -26,34 +26,65 @@ app.use(
   })
 );
 
-// MongoDB URI
-const dbUser = process.env.DB_USER || "arafat";
-const dbPass = process.env.DB_PASS;
-const uri = dbPass
-  ? `mongodb+srv://${dbUser}:${dbPass}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`
-  : `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// Safe Lazy MongoDB Client Helper
+let cachedClient = null;
+let cachedDb = null;
 
-// Create a MongoClient instance
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
+function getDatabase() {
+  const dbUser = process.env.DB_USER;
+  const dbPass = process.env.DB_PASS;
 
-// Helper database and collections accessor
-const db = client.db("collaborative-study");
-const studySessionCollection = db.collection("studySession");
-const userCollection = db.collection("users");
-const uploadMaterialsCollection = db.collection("materials");
-const bookedSessionsCollection = db.collection("booked-sessions");
-const studentReviewCollection = db.collection("student-review");
-const studentNoteCollection = db.collection("student-notes");
+  if (!dbUser || !dbPass) {
+    throw new Error(
+      "Missing MongoDB credentials (DB_USER or DB_PASS) in Environment Variables. Please add them in Vercel Project Settings > Environment Variables."
+    );
+  }
 
-// Root Route
+  if (cachedClient && cachedDb) {
+    return { client: cachedClient, db: cachedDb };
+  }
+
+  const uri = `mongodb+srv://${encodeURIComponent(dbUser)}:${encodeURIComponent(
+    dbPass
+  )}@cluster0.ybjyx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+
+  cachedClient = new MongoClient(uri, {
+    serverApi: {
+      version: ServerApiVersion.v1,
+      strict: true,
+      deprecationErrors: true,
+    },
+  });
+
+  cachedDb = cachedClient.db("collaborative-study");
+  return { client: cachedClient, db: cachedDb };
+}
+
+// Collections helper
+function getCollections() {
+  const { db } = getDatabase();
+  return {
+    studySessionCollection: db.collection("studySession"),
+    userCollection: db.collection("users"),
+    uploadMaterialsCollection: db.collection("materials"),
+    bookedSessionsCollection: db.collection("booked-sessions"),
+    studentReviewCollection: db.collection("student-review"),
+    studentNoteCollection: db.collection("student-notes"),
+  };
+}
+
+// Health check / Root Route
 app.get("/", (req, res) => {
-  res.send("Collaborative Study Server is Running");
+  const hasDbConfig = !!(process.env.DB_USER && process.env.DB_PASS);
+  const hasStripeConfig = !!(process.env.STRIPE_SECRET_KEY || process.env.STRIP_SECRET_KEY);
+  res.send({
+    message: "Collaborative Study Server is Running",
+    status: "healthy",
+    environment: {
+      dbConfigured: hasDbConfig,
+      stripeConfigured: hasStripeConfig,
+    },
+  });
 });
 
 // ================= JWT =================
@@ -90,11 +121,12 @@ const verifyToken = (req, res, next) => {
 // ================= User APIs =================
 app.get("/users", verifyToken, async (req, res) => {
   try {
+    const { userCollection } = getCollections();
     const result = await userCollection.find().toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching users:", error);
-    res.status(500).send({ error: "Failed to fetch users" });
+    res.status(500).send({ error: error.message || "Failed to fetch users" });
   }
 });
 
@@ -105,6 +137,7 @@ app.get(["/user/admin/:email", "/user/role/:email", "/users/role/:email"], async
     if (!rawEmail) {
       return res.send({ role: "student", admin: false });
     }
+    const { userCollection } = getCollections();
     const escapedEmail = rawEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const query = { email: { $regex: new RegExp(`^${escapedEmail}$`, "i") } };
     const result = await userCollection.findOne(query);
@@ -112,7 +145,7 @@ app.get(["/user/admin/:email", "/user/role/:email", "/users/role/:email"], async
     res.send({ role: userRole, admin: userRole === "admin" });
   } catch (error) {
     console.error("Error fetching user role:", error);
-    res.status(500).send({ error: "Failed to fetch user role" });
+    res.status(500).send({ error: error.message || "Failed to fetch user role" });
   }
 });
 
@@ -124,6 +157,7 @@ app.post("/users", async (req, res) => {
     if (!rawEmail) {
       return res.status(400).send({ error: "Email is required" });
     }
+    const { userCollection } = getCollections();
     const escapedEmail = rawEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const query = { email: { $regex: new RegExp(`^${escapedEmail}$`, "i") } };
     const existingUser = await userCollection.findOne(query);
@@ -143,7 +177,7 @@ app.post("/users", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error saving user:", error);
-    res.status(500).send({ error: "Failed to save user" });
+    res.status(500).send({ error: error.message || "Failed to save user" });
   }
 });
 
@@ -153,6 +187,7 @@ app.patch("/users/role/:id", async (req, res) => {
     const id = req.params.id;
     const { role } = req.body;
     const sanitizedRole = (role || "student").toLowerCase().trim();
+    const { userCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const updateDoc = {
       $set: { role: sanitizedRole },
@@ -161,53 +196,53 @@ app.patch("/users/role/:id", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error updating role:", error);
-    res.status(500).send({ error: "Failed to update role" });
+    res.status(500).send({ error: error.message || "Failed to update role" });
   }
 });
 
 // ================= Study Session APIs =================
-// Get all sessions
 app.get("/studySession", async (req, res) => {
   try {
+    const { studySessionCollection } = getCollections();
     const result = await studySessionCollection.find().toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching study sessions:", error);
-    res.status(500).send({ error: "Failed to fetch study sessions" });
+    res.status(500).send({ error: error.message || "Failed to fetch study sessions" });
   }
 });
 
-// Get specific study session by id
 app.get("/study/:id", async (req, res) => {
   try {
     const id = req.params.id;
+    const { studySessionCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const result = await studySessionCollection.findOne(query);
     res.send(result);
   } catch (error) {
     console.error("Error fetching single study session:", error);
-    res.status(500).send({ error: "Failed to fetch session" });
+    res.status(500).send({ error: error.message || "Failed to fetch session" });
   }
 });
 
-// Get study sessions by tutor email
 app.get("/studySession/:email", async (req, res) => {
   try {
     const email = req.params.email;
+    const { studySessionCollection } = getCollections();
     const filter = { tutorEmail: email };
     const result = await studySessionCollection.find(filter).toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching tutor sessions:", error);
-    res.status(500).send({ error: "Failed to fetch tutor sessions" });
+    res.status(500).send({ error: error.message || "Failed to fetch tutor sessions" });
   }
 });
 
-// Admin reject session with feedback reason
 app.patch("/sessions/reject/:id", async (req, res) => {
   try {
     const id = req.params.id;
     const { rejectionReason } = req.body;
+    const { studySessionCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const update = {
       $set: {
@@ -219,11 +254,10 @@ app.patch("/sessions/reject/:id", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error rejecting session:", error);
-    res.status(500).send({ error: "Failed to reject session" });
+    res.status(500).send({ error: error.message || "Failed to reject session" });
   }
 });
 
-// Re-request approval (set status to pending)
 app.patch("/studySession/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -235,6 +269,7 @@ app.patch("/studySession/:id", async (req, res) => {
         .send({ message: "Invalid status. Only 'pending' is allowed." });
     }
 
+    const { studySessionCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const update = {
       $set: { status: "pending" },
@@ -244,15 +279,15 @@ app.patch("/studySession/:id", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error updating session status:", error);
-    res.status(500).send({ error: "Failed to update session status" });
+    res.status(500).send({ error: error.message || "Failed to update session status" });
   }
 });
 
-// Admin approve session with fee
 app.patch("/sessions/success/:id", async (req, res) => {
   try {
     const id = req.params.id;
     const { registrationFee } = req.body;
+    const { studySessionCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const update = {
       $set: { status: "success", registrationFee: Number(registrationFee) },
@@ -261,63 +296,63 @@ app.patch("/sessions/success/:id", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error approving session:", error);
-    res.status(500).send({ error: "Failed to approve session" });
+    res.status(500).send({ error: error.message || "Failed to approve session" });
   }
 });
 
-// Delete session
 app.delete("/deleted/session/:id", async (req, res) => {
   try {
     const id = req.params.id;
+    const { studySessionCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const result = await studySessionCollection.deleteOne(query);
     res.send(result);
   } catch (error) {
     console.error("Error deleting session:", error);
-    res.status(500).send({ error: "Failed to delete session" });
+    res.status(500).send({ error: error.message || "Failed to delete session" });
   }
 });
 
-// Create study session
 app.post("/studySession", async (req, res) => {
   try {
     const session = req.body;
+    const { studySessionCollection } = getCollections();
     const result = await studySessionCollection.insertOne(session);
     res.send(result);
   } catch (error) {
     console.error("Error creating study session:", error);
-    res.status(500).send({ error: "Failed to create study session" });
+    res.status(500).send({ error: error.message || "Failed to create study session" });
   }
 });
 
 // ================= Study Materials APIs =================
-// Upload materials
 app.post("/materials", async (req, res) => {
   try {
     const material = req.body;
+    const { uploadMaterialsCollection } = getCollections();
     const result = await uploadMaterialsCollection.insertOne(material);
     res.send(result);
   } catch (error) {
     console.error("Error uploading material:", error);
-    res.status(500).send({ error: "Failed to upload material" });
+    res.status(500).send({ error: error.message || "Failed to upload material" });
   }
 });
 
-// Get all materials
 app.get("/allMaterials", async (req, res) => {
   try {
+    const { uploadMaterialsCollection } = getCollections();
     const result = await uploadMaterialsCollection.find().toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching materials:", error);
-    res.status(500).send({ error: "Failed to fetch materials" });
+    res.status(500).send({ error: error.message || "Failed to fetch materials" });
   }
 });
 
-// Get materials by ID or Tutor Email
 app.get("/materials/:identifier", async (req, res) => {
   try {
     const identifier = req.params.identifier;
+    const { uploadMaterialsCollection } = getCollections();
     if (ObjectId.isValid(identifier) && identifier.length === 24) {
       const singleMaterial = await uploadMaterialsCollection.findOne({ _id: new ObjectId(identifier) });
       if (singleMaterial) {
@@ -329,28 +364,28 @@ app.get("/materials/:identifier", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error fetching materials by identifier:", error);
-    res.status(500).send({ error: "Failed to fetch materials" });
+    res.status(500).send({ error: error.message || "Failed to fetch materials" });
   }
 });
 
-// Delete material
 app.delete("/materials/:id", async (req, res) => {
   try {
     const id = req.params.id;
+    const { uploadMaterialsCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const result = await uploadMaterialsCollection.deleteOne(query);
     res.send(result);
   } catch (error) {
     console.error("Error deleting material:", error);
-    res.status(500).send({ error: "Failed to delete material" });
+    res.status(500).send({ error: error.message || "Failed to delete material" });
   }
 });
 
-// Update material (supports PUT & PATCH on both /materials/:id and /material/:id)
 const updateMaterialHandler = async (req, res) => {
   try {
     const id = req.params.id;
     const { _id, ...materials } = req.body;
+    const { uploadMaterialsCollection } = getCollections();
     const filter = { _id: new ObjectId(id) };
     const update = {
       $set: materials,
@@ -359,7 +394,7 @@ const updateMaterialHandler = async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error updating material:", error);
-    res.status(500).send({ error: "Failed to update material" });
+    res.status(500).send({ error: error.message || "Failed to update material" });
   }
 };
 
@@ -368,13 +403,12 @@ app.put("/materials/:id", updateMaterialHandler);
 app.put("/material/:id", updateMaterialHandler);
 
 // ================= Student Booked Sessions APIs =================
-// Book a session
 app.post("/booked-sessions", async (req, res) => {
   try {
     const { sessionId, user, ...data } = req.body;
     const query = { sessionId, user };
+    const { bookedSessionsCollection } = getCollections();
 
-    // Check if already booked
     const existingSession = await bookedSessionsCollection.findOne(query);
     if (existingSession) {
       return res.send({ message: "Session already booked" });
@@ -388,26 +422,26 @@ app.post("/booked-sessions", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error booking session:", error);
-    res.status(500).send({ error: "Failed to book session" });
+    res.status(500).send({ error: error.message || "Failed to book session" });
   }
 });
 
-// Get all booked sessions
 app.get("/booked-sessions", async (req, res) => {
   try {
+    const { bookedSessionsCollection } = getCollections();
     const result = await bookedSessionsCollection.find().toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching booked sessions:", error);
-    res.status(500).send({ error: "Failed to fetch booked sessions" });
+    res.status(500).send({ error: error.message || "Failed to fetch booked sessions" });
   }
 });
 
-// Check single booked session status by sessionId and user query
 app.get("/booked-sessions/:sessionId", async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const userEmail = req.query.user;
+    const { bookedSessionsCollection } = getCollections();
     if (userEmail) {
       const existing = await bookedSessionsCollection.findOne({ sessionId, user: userEmail });
       return res.send({ isBooked: !!existing, session: existing });
@@ -416,92 +450,92 @@ app.get("/booked-sessions/:sessionId", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error checking session booking status:", error);
-    res.status(500).send({ error: "Failed to check booking status" });
+    res.status(500).send({ error: error.message || "Failed to check booking status" });
   }
 });
 
-// Get booked sessions for specific student email
 app.get("/bookedSessions/:email", async (req, res) => {
   try {
     const email = req.params.email;
     const query = { user: email };
+    const { bookedSessionsCollection } = getCollections();
     const result = await bookedSessionsCollection.find(query).toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching student booked sessions:", error);
-    res.status(500).send({ error: "Failed to fetch student booked sessions" });
+    res.status(500).send({ error: error.message || "Failed to fetch student booked sessions" });
   }
 });
 
-// Get booked session details by ID
 app.get("/bookedDetails/:id", async (req, res) => {
   try {
     const id = req.params.id;
+    const { bookedSessionsCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const result = await bookedSessionsCollection.findOne(query);
     res.send(result);
   } catch (error) {
     console.error("Error fetching booked details:", error);
-    res.status(500).send({ error: "Failed to fetch booked details" });
+    res.status(500).send({ error: error.message || "Failed to fetch booked details" });
   }
 });
 
 // ================= Student Reviews & Notes APIs =================
-// Student review
 app.post("/all-reviews", async (req, res) => {
   try {
     const review = req.body;
+    const { studentReviewCollection } = getCollections();
     const result = await studentReviewCollection.insertOne(review);
     res.send(result);
   } catch (error) {
     console.error("Error submitting review:", error);
-    res.status(500).send({ error: "Failed to submit review" });
+    res.status(500).send({ error: error.message || "Failed to submit review" });
   }
 });
 
-// Create note
 app.post("/all-notes", async (req, res) => {
   try {
     const note = req.body;
+    const { studentNoteCollection } = getCollections();
     const result = await studentNoteCollection.insertOne(note);
     res.send(result);
   } catch (error) {
     console.error("Error creating note:", error);
-    res.status(500).send({ error: "Failed to create note" });
+    res.status(500).send({ error: error.message || "Failed to create note" });
   }
 });
 
-// Get all notes for specific student email
 app.get("/all-notes/:email", async (req, res) => {
   try {
     const email = req.params.email;
     const query = { email: email };
+    const { studentNoteCollection } = getCollections();
     const result = await studentNoteCollection.find(query).toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching notes:", error);
-    res.status(500).send({ error: "Failed to fetch notes" });
+    res.status(500).send({ error: error.message || "Failed to fetch notes" });
   }
 });
 
-// Delete note
 app.delete("/all-notes/:id", async (req, res) => {
   try {
     const id = req.params.id;
+    const { studentNoteCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const result = await studentNoteCollection.deleteOne(query);
     res.send(result);
   } catch (error) {
     console.error("Error deleting note:", error);
-    res.status(500).send({ error: "Failed to delete note" });
+    res.status(500).send({ error: error.message || "Failed to delete note" });
   }
 });
 
-// Update note
 app.put("/all-notes/:id", async (req, res) => {
   try {
     const id = req.params.id;
     const { _id, ...updatedNote } = req.body;
+    const { studentNoteCollection } = getCollections();
     const query = { _id: new ObjectId(id) };
     const update = {
       $set: updatedNote,
@@ -510,7 +544,7 @@ app.put("/all-notes/:id", async (req, res) => {
     res.send(result);
   } catch (error) {
     console.error("Error updating note:", error);
-    res.status(500).send({ error: "Failed to update note" });
+    res.status(500).send({ error: error.message || "Failed to update note" });
   }
 });
 
