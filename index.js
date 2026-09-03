@@ -15,13 +15,27 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 app.use(express.json());
 app.use(
   cors({
-    origin: [
-      "https://collaborative-study-plat-312b7.web.app",
-      "https://collaborative-study-plat-312b7.firebaseapp.com",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:3000",
-    ],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, Postman)
+      if (!origin) return callback(null, true);
+      
+      const allowedOrigins = [
+        "https://collaborative-study-plat-312b7.web.app",
+        "https://collaborative-study-plat-312b7.firebaseapp.com",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+      ];
+      
+      if (
+        allowedOrigins.includes(origin) ||
+        /^http:\/\/localhost:\d+$/.test(origin) ||
+        /^http:\/\/127\.0\.0\.1:\d+$/.test(origin)
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
     credentials: true,
   })
 );
@@ -36,7 +50,7 @@ function getDatabase() {
 
   if (!dbUser || !dbPass) {
     throw new Error(
-      "Missing MongoDB credentials (DB_USER or DB_PASS) in Environment Variables. Please add them in Vercel Project Settings > Environment Variables."
+      "Missing MongoDB credentials (DB_USER or DB_PASS) in Environment Variables. Please check your .env file or Vercel Environment Variables."
     );
   }
 
@@ -73,17 +87,32 @@ function getCollections() {
   };
 }
 
-// Health check / Root Route
-app.get("/", (req, res) => {
-  const hasDbConfig = !!(process.env.DB_USER && process.env.DB_PASS);
+// Health check / Root Route with live MongoDB test
+app.get("/", async (req, res) => {
+  let dbStatus = "disconnected";
+  let dbError = null;
+  let userCount = 0;
+  
+  try {
+    const { client, db } = getDatabase();
+    await client.db("admin").command({ ping: 1 });
+    dbStatus = "connected";
+    userCount = await db.collection("users").countDocuments();
+  } catch (err) {
+    dbError = err.message;
+  }
+
   const hasStripeConfig = !!(process.env.STRIPE_SECRET_KEY || process.env.STRIP_SECRET_KEY);
   res.send({
     message: "Collaborative Study Server is Running",
-    status: "healthy",
-    environment: {
-      dbConfigured: hasDbConfig,
-      stripeConfigured: hasStripeConfig,
+    status: dbStatus === "connected" ? "healthy" : "degraded",
+    database: {
+      status: dbStatus,
+      name: "collaborative-study",
+      usersInDb: userCount,
+      error: dbError,
     },
+    stripeConfigured: hasStripeConfig,
   });
 });
 
@@ -119,6 +148,21 @@ const verifyToken = (req, res, next) => {
 };
 
 // ================= User APIs =================
+// Public tutors endpoint for homepage showcase
+app.get(["/tutors", "/public-tutors"], async (req, res) => {
+  try {
+    const { userCollection } = getCollections();
+    const result = await userCollection
+      .find({ role: { $regex: /^tutor$/i } })
+      .project({ name: 1, email: 1, image: 1, role: 1 })
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching tutors:", error);
+    res.status(500).send({ error: error.message || "Failed to fetch tutors" });
+  }
+});
+
 app.get("/users", verifyToken, async (req, res) => {
   try {
     const { userCollection } = getCollections();
@@ -197,6 +241,23 @@ app.patch("/users/role/:id", async (req, res) => {
   } catch (error) {
     console.error("Error updating role:", error);
     res.status(500).send({ error: error.message || "Failed to update role" });
+  }
+});
+
+// Delete user API (Admin capability)
+app.delete("/users/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).send({ error: "Invalid user ID" });
+    }
+    const { userCollection } = getCollections();
+    const query = { _id: new ObjectId(id) };
+    const result = await userCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).send({ error: error.message || "Failed to delete user" });
   }
 });
 
@@ -349,6 +410,110 @@ app.get("/allMaterials", async (req, res) => {
   }
 });
 
+// Get study materials for an enrolled student (only sessions/tutors the student has booked)
+app.get(["/student-materials/:email", "/materials/student/:email"], async (req, res) => {
+  try {
+    const studentEmail = req.params.email?.trim();
+    if (!studentEmail) {
+      return res.status(400).send({ error: "Student email is required" });
+    }
+
+    const { bookedSessionsCollection, uploadMaterialsCollection, studySessionCollection } = getCollections();
+
+    // 1. Fetch all sessions booked by this student
+    const bookedSessions = await bookedSessionsCollection.find({ user: studentEmail }).toArray();
+
+    if (!bookedSessions || bookedSessions.length === 0) {
+      return res.send([]);
+    }
+
+    // 2. Collect session IDs and tutor emails
+    const sessionIds = [];
+    const sessionObjectIds = [];
+    const tutorEmails = [];
+
+    bookedSessions.forEach((b) => {
+      if (b.sessionId) {
+        const sidStr = String(b.sessionId);
+        sessionIds.push(sidStr);
+        if (ObjectId.isValid(sidStr) && sidStr.length === 24) {
+          sessionObjectIds.push(new ObjectId(sidStr));
+        }
+      }
+      if (b.tutorEmail) {
+        tutorEmails.push(b.tutorEmail);
+      }
+    });
+
+    // 3. Find materials matching student's enrolled sessions or tutors
+    const orConditions = [];
+    if (sessionIds.length > 0) {
+      orConditions.push({ sessionId: { $in: sessionIds } });
+    }
+    if (sessionObjectIds.length > 0) {
+      orConditions.push({ sessionId: { $in: sessionObjectIds } });
+    }
+    if (tutorEmails.length > 0) {
+      orConditions.push({ tutorEmail: { $in: tutorEmails } });
+    }
+
+    const materialsQuery = orConditions.length > 0 ? { $or: orConditions } : {};
+    const materials = await uploadMaterialsCollection.find(materialsQuery).toArray();
+
+    // 4. Enrich materials with booked session information
+    const enriched = materials.map((mat) => {
+      const match = bookedSessions.find(
+        (b) => String(b.sessionId) === String(mat.sessionId) || b.tutorEmail === mat.tutorEmail
+      );
+      return {
+        ...mat,
+        sessionTitle: mat.sessionTitle || match?.sessionTitle || "Study Session",
+        tutorName: match?.tutorName || mat.tutorName || mat.tutorEmail,
+      };
+    });
+
+    res.send(enriched);
+  } catch (error) {
+    console.error("Error fetching enrolled student materials:", error);
+    res.status(500).send({ error: error.message || "Failed to fetch student materials" });
+  }
+});
+
+// Get materials for a specific session ID (with optional enrollment check)
+app.get("/materials/session/:sessionId", async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const userEmail = req.query.user?.trim();
+    const { uploadMaterialsCollection, bookedSessionsCollection } = getCollections();
+
+    if (userEmail) {
+      const isBooked = await bookedSessionsCollection.findOne({
+        sessionId: sessionId,
+        user: userEmail,
+      });
+      if (!isBooked) {
+        return res.status(403).send({
+          error: "Access denied. You must enroll in this study session to view its materials.",
+          enrolled: false,
+        });
+      }
+    }
+
+    const query = {
+      $or: [
+        { sessionId: sessionId },
+        ...(ObjectId.isValid(sessionId) && sessionId.length === 24 ? [{ sessionId: new ObjectId(sessionId) }] : [])
+      ]
+    };
+
+    const result = await uploadMaterialsCollection.find(query).toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error fetching session materials:", error);
+    res.status(500).send({ error: error.message || "Failed to fetch session materials" });
+  }
+});
+
 app.get("/materials/:identifier", async (req, res) => {
   try {
     const identifier = req.params.identifier;
@@ -411,15 +576,26 @@ app.post("/booked-sessions", async (req, res) => {
 
     const existingSession = await bookedSessionsCollection.findOne(query);
     if (existingSession) {
-      return res.send({ message: "Session already booked" });
+      return res.send({ message: "Session already booked", session: existingSession });
     }
 
-    const result = await bookedSessionsCollection.insertOne({
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const invoiceNumber = `INV-${Date.now().toString().slice(-6)}-${randomSuffix}`;
+    const fee = parseFloat(data.registrationFee) || 0;
+    const bookingDate = data.bookingDate || new Date().toISOString();
+
+    const newBooking = {
       sessionId,
       user,
+      invoiceNumber,
+      bookingDate,
+      registrationFee: fee,
+      paymentStatus: fee > 0 ? "Paid" : "Free",
       ...data,
-    });
-    res.send(result);
+    };
+
+    const result = await bookedSessionsCollection.insertOne(newBooking);
+    res.send({ ...result, invoiceNumber, booking: { ...newBooking, _id: result.insertedId } });
   } catch (error) {
     console.error("Error booking session:", error);
     res.status(500).send({ error: error.message || "Failed to book session" });
@@ -429,11 +605,108 @@ app.post("/booked-sessions", async (req, res) => {
 app.get("/booked-sessions", async (req, res) => {
   try {
     const { bookedSessionsCollection } = getCollections();
-    const result = await bookedSessionsCollection.find().toArray();
+    const result = await bookedSessionsCollection.find().sort({ _id: -1 }).toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching booked sessions:", error);
     res.status(500).send({ error: error.message || "Failed to fetch booked sessions" });
+  }
+});
+
+// Admin Sales & Revenue Analytics API
+app.get("/admin/sales-analytics", async (req, res) => {
+  try {
+    const { bookedSessionsCollection } = getCollections();
+    const bookings = await bookedSessionsCollection.find().sort({ _id: -1 }).toArray();
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth(); // 0-indexed
+
+    let totalRevenue = 0;
+    let thisMonthRevenue = 0;
+    let paidBookings = 0;
+    let freeBookings = 0;
+
+    // Monthly bucket structure (initialize all 12 months for current year)
+    const monthNames = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ];
+
+    const monthlyMap = {};
+    monthNames.forEach((name, index) => {
+      monthlyMap[index] = {
+        month: name,
+        monthIndex: index,
+        revenue: 0,
+        bookings: 0,
+        paid: 0,
+        free: 0,
+      };
+    });
+
+    const enrichedTransactions = bookings.map((item, index) => {
+      const fee = parseFloat(item.registrationFee) || 0;
+      const bDate = item.bookingDate ? new Date(item.bookingDate) : new Date();
+      const invoiceNumber = item.invoiceNumber || `INV-${String(index + 1).padStart(5, '0')}`;
+      const isPaid = fee > 0;
+
+      totalRevenue += fee;
+      if (isPaid) {
+        paidBookings++;
+      } else {
+        freeBookings++;
+      }
+
+      // Check if booking is in current month & year
+      if (bDate.getFullYear() === currentYear && bDate.getMonth() === currentMonth) {
+        thisMonthRevenue += fee;
+      }
+
+      // Aggregate into monthly stats if in current year
+      const bMonth = bDate.getMonth();
+      if (monthlyMap[bMonth]) {
+        monthlyMap[bMonth].revenue += fee;
+        monthlyMap[bMonth].bookings += 1;
+        if (isPaid) {
+          monthlyMap[bMonth].paid += 1;
+        } else {
+          monthlyMap[bMonth].free += 1;
+        }
+      }
+
+      return {
+        ...item,
+        invoiceNumber,
+        registrationFee: fee,
+        paymentStatus: isPaid ? "Paid" : "Free",
+        bookingDateFormatted: bDate.toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }),
+      };
+    });
+
+    const monthlyStats = Object.values(monthlyMap);
+
+    res.send({
+      summary: {
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+        thisMonthRevenue: Math.round(thisMonthRevenue * 100) / 100,
+        totalBookings: bookings.length,
+        paidBookings,
+        freeBookings,
+        currentYear,
+        currentMonthName: monthNames[currentMonth],
+      },
+      monthlyStats,
+      transactions: enrichedTransactions,
+    });
+  } catch (error) {
+    console.error("Error fetching sales analytics:", error);
+    res.status(500).send({ error: error.message || "Failed to fetch sales analytics" });
   }
 });
 
@@ -459,7 +732,7 @@ app.get("/bookedSessions/:email", async (req, res) => {
     const email = req.params.email;
     const query = { user: email };
     const { bookedSessionsCollection } = getCollections();
-    const result = await bookedSessionsCollection.find(query).toArray();
+    const result = await bookedSessionsCollection.find(query).sort({ _id: -1 }).toArray();
     res.send(result);
   } catch (error) {
     console.error("Error fetching student booked sessions:", error);
@@ -584,10 +857,19 @@ app.post("/create-payment-intent", async (req, res) => {
 });
 
 if (!process.env.VERCEL) {
-  app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
+  app.listen(port, async () => {
+    console.log(`🚀 Collaborative Study Server is listening on port ${port}`);
+    try {
+      const { client, db } = getDatabase();
+      await client.db("admin").command({ ping: 1 });
+      const count = await db.collection("users").countDocuments();
+      console.log(`✅ Successfully connected to MongoDB Atlas! (Database: collaborative-study, Users: ${count})`);
+    } catch (err) {
+      console.error(`❌ MongoDB connection error:`, err.message);
+    }
   });
 }
 
 // Export for Vercel Serverless Functions
 module.exports = app;
+
