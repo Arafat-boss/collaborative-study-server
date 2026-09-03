@@ -1,4 +1,4 @@
-Live Link: https://collaborative-study-server-1vy0fpmtv-arafats-projects-0aa5d1a6.vercel.app/
+Live Link: https://collaborative-study-server-az9x.vercel.app/
 
 This backend application is built using several technologies and libraries to handle the various functionalities required for your Collaborative Study Platform. Below is a detailed breakdown of the libraries and tools used, their purpose, and how they work together:
 
