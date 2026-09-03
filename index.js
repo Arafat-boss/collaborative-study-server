@@ -583,7 +583,7 @@ app.post("/create-payment-intent", async (req, res) => {
   }
 });
 
-if (process.env.NODE_ENV !== "production") {
+if (!process.env.VERCEL) {
   app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
   });
